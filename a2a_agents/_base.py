@@ -179,7 +179,12 @@ def build_app(
             ),
             "skills": card.get("skills", []),
             "supportedInterfaces": [
-                {"transport": "HTTP+JSON", "url": f"{base}/invoke"},
+                {
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "0.2.0",
+                    "transport": "JSONRPC",
+                    "url": f"{base}/invoke",
+                },
             ],
         }
 

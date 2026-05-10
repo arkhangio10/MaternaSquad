@@ -125,9 +125,46 @@ Cloud Build pipeline order:
 - For structured outputs, use Claude tool use via `generate_structured()`. The function converts the Pydantic schema to a JSON schema tool and forces `tool_choice` to that tool. Validate with `schema.model_validate(block.input)`.
 - For narratives, force citations as `[Observation/abc123]` inline tokens, post-validate them via `mcp_server/src/gemini.py:CITATION_PATTERN`.
 
-## Known issues (fix before demo video)
+## Current state (2026-05-10 night)
 
-- Orchestrator `clinician_summary` falls back to generic text because the Gemini response lacks inline `[ResourceType/id]` citation tokens. Structured sub-agent output is complete and correct. Fix the citation guard in `a2a_agents/orchestrator/agent.py` before recording.
+All 7 services deployed and verified responding on Cloud Run. Smoke tested end-to-end with 3 Synthea personas. The clinician_summary citation guard works (fixed via prompt engineering on 2026-05-09 + max_output_tokens bumped to 1500 on 2026-05-10).
+
+**Cloud Run URLs (region europe-west4, project maternasquad):**
+
+- HAPI:             https://maternasquad-hapi-mdf575wm2q-ez.a.run.app
+- MCP:              https://maternasquad-mcp-mdf575wm2q-ez.a.run.app
+- Orchestrator:     https://maternasquad-orchestrator-mdf575wm2q-ez.a.run.app
+- Risk:             https://maternasquad-risk-agent-mdf575wm2q-ez.a.run.app
+- Coverage:         https://maternasquad-coverage-agent-mdf575wm2q-ez.a.run.app
+- Education:        https://maternasquad-education-agent-mdf575wm2q-ez.a.run.app
+- Postpartum watch: https://maternasquad-postpartum-watch-mdf575wm2q-ez.a.run.app
+
+**Patients on Cloud Run HAPI** (different IDs from local):
+- Patient/1076: Cordelia (preeclampsia demo star, Detroit)
+- Patient/1569: Cyndi (postpartum mental health, rural KY)
+- Patient/2218: Yuri (GDM, Houston, Spanish locale)
+
+**Prompt Opinion registration status:**
+- ✅ MCP Server registered ("MaternaSquad MCP - Maternal Clinical Toolbox") in Configuration → MCP Servers
+- ✅ 5 External Agents registered in Agents → External Agents (Orchestrator, Risk, Coverage, Education, Postpartum Watch)
+- ⚠️ Po-native "MaternaSquad Care Coordinator" orchestrator: Basic tab filled but blocked. The Linked Agents tab requires Po-native Custom Agents (not our External Agents). Save kept failing. Pause and revisit via the Tools tab approach.
+
+**Where to resume 2026-05-11:**
+1. Configure the Po Care Coordinator's `Tools` tab to attach the MaternaSquad MCP, then write a System Prompt, save. OR pivot to activating the General Chat Agent with our MCP tools.
+2. Live test the chat inside Prompt Opinion with Patient/1076.
+3. Publish to Marketplace Studio (requires paid subscription per UI warning - check if free tier can publish).
+4. Write README.md.
+5. Register on Devpost (agents-assemble.devpost.com).
+6. Record demo video under 3:00 (script at docs/DEMO_SCRIPT.md, marketplace copy at docs/MARKETPLACE_LISTINGS.md).
+7. Submit before 2026-05-11 23:00 EDT.
+
+**Important after every full deploy:** the make-public Cloud Build step always fails (compute SA lacks setIamPolicy). Run this PowerShell loop locally to re-grant `allUsers/run.invoker`:
+
+```powershell
+foreach ($svc in @("maternasquad-hapi","maternasquad-mcp","maternasquad-orchestrator","maternasquad-risk-agent","maternasquad-coverage-agent","maternasquad-education-agent","maternasquad-postpartum-watch")) {
+    gcloud run services add-iam-policy-binding $svc --region=europe-west4 --project=maternasquad --member="allUsers" --role="roles/run.invoker" --quiet | Out-Null
+}
+```
 
 ## Writing style for the user
 

@@ -17,7 +17,7 @@ from typing import Any
 
 import structlog
 from dotenv import load_dotenv
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
 from mcp_server.src.audit import write_entry
@@ -59,15 +59,19 @@ Synthetic data only. Every clinical output cites FHIR resource references.""",
 )
 
 
-def _ctx_from_request_headers(headers: dict[str, str] | None) -> SharpContext:
+def _ctx_from_request_headers(
+    headers: dict[str, str] | None, ctx: Context | None = None
+) -> SharpContext:
     """Materialize SHARP context.
 
     Resolution order:
       1. Explicit `headers` dict in the tool arguments (used by our A2A agents
          which propagate SHARP context as a tool arg).
-      2. The current HTTP request headers (used when Po calls the MCP directly;
-         it sets `x-fhir-server-url`, `x-fhir-access-token`, `x-patient-id`).
-      3. Local-dev env vars (`DEV_PATIENT_ID`, `FHIR_BASE_URL`,
+      2. The FastMCP `Context` parameter's HTTP request headers (used when Po
+         calls the MCP directly via streamable-http; Po sets
+         `x-fhir-server-url`, `x-fhir-access-token`, `x-patient-id`).
+      3. The `get_http_headers()` dependency as a secondary fallback.
+      4. Local-dev env vars (`DEV_PATIENT_ID`, `FHIR_BASE_URL`,
          `FHIR_ACCESS_TOKEN`).
     """
     if headers:
@@ -75,6 +79,19 @@ def _ctx_from_request_headers(headers: dict[str, str] | None) -> SharpContext:
             return SharpContext.from_headers(headers)
         except ValueError:
             pass
+
+    if ctx is not None:
+        try:
+            req = ctx.request_context.request  # type: ignore[union-attr]
+            req_headers = dict(req.headers) if req is not None else {}
+            if req_headers:
+                try:
+                    return SharpContext.from_headers(req_headers)
+                except ValueError:
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+
     try:
         http_headers = dict(get_http_headers(include_all=True) or {})
     except Exception:  # noqa: BLE001
@@ -84,6 +101,7 @@ def _ctx_from_request_headers(headers: dict[str, str] | None) -> SharpContext:
             return SharpContext.from_headers(http_headers)
         except ValueError:
             pass
+
     # Local dev fallback: env vars seed a context for testing without a real EHR.
     return SharpContext(
         patient_id=os.environ.get("DEV_PATIENT_ID", "example-patient"),
@@ -94,14 +112,16 @@ def _ctx_from_request_headers(headers: dict[str, str] | None) -> SharpContext:
 
 @mcp.tool
 async def fhir_get_pregnancy_context(
-    headers: dict[str, str] | None = None, lookback_days: int = 365
+    headers: dict[str, str] | None = None,
+    lookback_days: int = 365,
+    mcp_ctx: Context | None = None,
 ) -> PregnancyContext:
     """Aggregate FHIR resources relevant to a pregnant patient.
 
     Returns Patient summary, active Conditions, vitals Observations,
     MedicationRequests, CarePlans and recent Encounters with citation refs.
     """
-    ctx = _ctx_from_request_headers(headers)
+    ctx = _ctx_from_request_headers(headers, ctx=mcp_ctx)
     result = await get_pregnancy_context(ctx, lookback_days=lookback_days)
     write_entry(
         ctx=ctx,
@@ -115,9 +135,12 @@ async def fhir_get_pregnancy_context(
 
 
 @mcp.tool
-async def acog_preeclampsia_risk(headers: dict[str, str] | None = None) -> RiskScore:
+async def acog_preeclampsia_risk(
+    headers: dict[str, str] | None = None,
+    mcp_ctx: Context | None = None,
+) -> RiskScore:
     """Compute preeclampsia risk per USPSTF 2021 and ACOG PB 222 (2020)."""
-    ctx = _ctx_from_request_headers(headers)
+    ctx = _ctx_from_request_headers(headers, ctx=mcp_ctx)
     pregnancy_ctx = await get_pregnancy_context(ctx)
     score = preeclampsia_risk(pregnancy_ctx)
     write_entry(
@@ -131,9 +154,12 @@ async def acog_preeclampsia_risk(headers: dict[str, str] | None = None) -> RiskS
 
 
 @mcp.tool
-async def acog_gdm_risk(headers: dict[str, str] | None = None) -> RiskScore:
+async def acog_gdm_risk(
+    headers: dict[str, str] | None = None,
+    mcp_ctx: Context | None = None,
+) -> RiskScore:
     """Compute gestational diabetes risk per ACOG PB 234 (2021) + ADA 2024."""
-    ctx = _ctx_from_request_headers(headers)
+    ctx = _ctx_from_request_headers(headers, ctx=mcp_ctx)
     pregnancy_ctx = await get_pregnancy_context(ctx)
     score = gdm_risk(pregnancy_ctx)
     write_entry(
@@ -147,9 +173,12 @@ async def acog_gdm_risk(headers: dict[str, str] | None = None) -> RiskScore:
 
 
 @mcp.tool
-async def acog_preterm_birth_risk(headers: dict[str, str] | None = None) -> RiskScore:
+async def acog_preterm_birth_risk(
+    headers: dict[str, str] | None = None,
+    mcp_ctx: Context | None = None,
+) -> RiskScore:
     """Compute preterm birth risk per ACOG PB 232 (2021)."""
-    ctx = _ctx_from_request_headers(headers)
+    ctx = _ctx_from_request_headers(headers, ctx=mcp_ctx)
     pregnancy_ctx = await get_pregnancy_context(ctx)
     score = preterm_birth_risk(pregnancy_ctx)
     write_entry(
@@ -168,9 +197,10 @@ async def patient_translate_message(
     grounded_references: list[str],
     target_grade_level: int = 5,
     headers: dict[str, str] | None = None,
+    mcp_ctx: Context | None = None,
 ) -> PatientMessage:
     """Translate clinical content into patient-friendly text in ctx.locale."""
-    ctx = _ctx_from_request_headers(headers)
+    ctx = _ctx_from_request_headers(headers, ctx=mcp_ctx)
     msg = await translate_for_patient(
         ctx,
         clinical_summary=clinical_summary,
@@ -195,9 +225,10 @@ async def patient_warning_signs_card(
     grounded_references: list[str],
     target_grade_level: int = 5,
     headers: dict[str, str] | None = None,
+    mcp_ctx: Context | None = None,
 ) -> PatientMessage:
     """Produce a warning-signs 'when to seek care' card for a condition."""
-    ctx = _ctx_from_request_headers(headers)
+    ctx = _ctx_from_request_headers(headers, ctx=mcp_ctx)
     msg = await warning_signs_card(
         ctx,
         condition_focus=condition_focus,
@@ -221,12 +252,13 @@ async def postpartum_triage(
     pregnancy_context_summary: str,
     grounded_references: list[str],
     headers: dict[str, str] | None = None,
+    mcp_ctx: Context | None = None,
 ) -> TriageDecision:
     """Classify a postpartum symptom message and draft an SBAR escalation.
 
     Uses CDC Hear Her warning signs and ACOG PB 736.
     """
-    ctx = _ctx_from_request_headers(headers)
+    ctx = _ctx_from_request_headers(headers, ctx=mcp_ctx)
     decision = await triage_symptom(
         ctx,
         patient_message=patient_message,
@@ -252,13 +284,14 @@ async def pa_draft_evidence_packet(
     grounded_references: list[str],
     questionnaire_response: dict[str, Any],
     headers: dict[str, str] | None = None,
+    mcp_ctx: Context | None = None,
 ) -> PaEvidencePacket:
     """Draft a Da Vinci PAS-shaped evidence packet for a ServiceRequest.
 
     Not full PAS IG conformance. The packet is suitable for human review and
     submission via the production PAS endpoint of the responsible payer.
     """
-    ctx = _ctx_from_request_headers(headers)
+    ctx = _ctx_from_request_headers(headers, ctx=mcp_ctx)
     sr = await fetch_service_request(ctx, service_request_id)
     coverage = await fetch_coverage(ctx)
 

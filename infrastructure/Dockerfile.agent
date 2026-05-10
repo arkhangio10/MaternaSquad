@@ -1,0 +1,46 @@
+# Generic Dockerfile for any MaternaSquad A2A agent.
+# Pass AGENT_MODULE at build time, e.g. a2a_agents.risk_agent.agent
+#
+# Build (example):
+#   docker build -f infrastructure/Dockerfile.agent \
+#       --build-arg AGENT_MODULE=a2a_agents.risk_agent.agent \
+#       --build-arg AGENT_PORT=8002 \
+#       -t maternasquad-risk-agent .
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+COPY pyproject.toml ./
+COPY mcp_server ./mcp_server
+COPY a2a_agents ./a2a_agents
+
+ARG AGENT_MODULE=a2a_agents.orchestrator.agent
+ARG AGENT_PORT=8001
+ENV AGENT_MODULE=${AGENT_MODULE} \
+    AGENT_PORT=${AGENT_PORT}
+
+RUN useradd --create-home --uid 1001 maternasquad \
+    && mkdir -p /app/audit \
+    && chown -R maternasquad:maternasquad /app
+USER maternasquad
+
+EXPOSE ${AGENT_PORT}
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD curl -fsS "http://localhost:${AGENT_PORT}/healthcheck" || exit 1
+
+# Use shell form so AGENT_MODULE expands at runtime.
+CMD python -m ${AGENT_MODULE}

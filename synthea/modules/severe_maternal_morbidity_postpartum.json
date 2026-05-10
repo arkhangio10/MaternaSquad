@@ -1,0 +1,121 @@
+{
+  "name": "severe_maternal_morbidity_postpartum",
+  "remarks": [
+    "MaternaSquad demo module.",
+    "Drops a postpartum preeclampsia or postpartum hemorrhage event into",
+    "patients who already had a recent delivery encounter. Wires up matching",
+    "Conditions and Observations so the Risk Agent and Postpartum Watch Agent",
+    "have something to find.",
+    "References:",
+    "  ACOG Practice Bulletin No. 222 (2020) Gestational Hypertension and Preeclampsia",
+    "  ACOG Practice Bulletin No. 736 (2018) Optimizing Postpartum Care",
+    "  CDC Hear Her warning signs"
+  ],
+  "states": {
+    "Initial": {
+      "type": "Initial",
+      "direct_transition": "Has_Recent_Delivery"
+    },
+    "Has_Recent_Delivery": {
+      "type": "Guard",
+      "allow": {
+        "condition_type": "PriorState",
+        "name": "End_Pregnancy"
+      },
+      "direct_transition": "Wait_Postpartum_Days"
+    },
+    "Wait_Postpartum_Days": {
+      "type": "Delay",
+      "range": {
+        "low": 4,
+        "high": 10,
+        "unit": "days"
+      },
+      "direct_transition": "Choose_Event"
+    },
+    "Choose_Event": {
+      "type": "Simple",
+      "distributed_transition": [
+        { "transition": "Postpartum_Preeclampsia", "distribution": 0.5 },
+        { "transition": "Postpartum_Hemorrhage",   "distribution": 0.3 },
+        { "transition": "End_Module",              "distribution": 0.2 }
+      ]
+    },
+    "Postpartum_Preeclampsia": {
+      "type": "ConditionOnset",
+      "target_encounter": "Urgent_Postpartum_Visit",
+      "codes": [
+        {
+          "system": "SNOMED-CT",
+          "code": "398254007",
+          "display": "Pre-eclampsia"
+        }
+      ],
+      "direct_transition": "Severe_Headache_Symptom"
+    },
+    "Severe_Headache_Symptom": {
+      "type": "Symptom",
+      "symptom": "Severe headache",
+      "range": { "low": 70, "high": 95 },
+      "direct_transition": "Elevated_BP_Reading"
+    },
+    "Elevated_BP_Reading": {
+      "type": "Observation",
+      "category": "vital-signs",
+      "unit": "mm[Hg]",
+      "codes": [
+        {
+          "system": "LOINC",
+          "code": "8480-6",
+          "display": "Systolic blood pressure"
+        }
+      ],
+      "exact": { "quantity": 162 },
+      "direct_transition": "Urgent_Postpartum_Visit"
+    },
+    "Urgent_Postpartum_Visit": {
+      "type": "Encounter",
+      "encounter_class": "emergency",
+      "reason": "Postpartum_Preeclampsia",
+      "codes": [
+        {
+          "system": "SNOMED-CT",
+          "code": "50849002",
+          "display": "Emergency room admission"
+        }
+      ],
+      "direct_transition": "Magnesium_Sulfate"
+    },
+    "Magnesium_Sulfate": {
+      "type": "MedicationOrder",
+      "codes": [
+        {
+          "system": "RxNorm",
+          "code": "8635",
+          "display": "Magnesium Sulfate"
+        }
+      ],
+      "direct_transition": "End_Postpartum_Visit"
+    },
+    "End_Postpartum_Visit": {
+      "type": "EncounterEnd",
+      "direct_transition": "End_Module"
+    },
+    "Postpartum_Hemorrhage": {
+      "type": "ConditionOnset",
+      "target_encounter": "Urgent_Postpartum_Visit",
+      "codes": [
+        {
+          "system": "SNOMED-CT",
+          "code": "47821001",
+          "display": "Postpartum hemorrhage"
+        }
+      ],
+      "direct_transition": "End_Module"
+    },
+    "End_Module": {
+      "type": "Terminal"
+    }
+  },
+  "gmf_version": 2
+}

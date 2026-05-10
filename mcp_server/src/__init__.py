@@ -1,0 +1,1 @@
+"""MaternaSquad MCP server core."""

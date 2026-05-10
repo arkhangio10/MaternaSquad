@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+service-account*.json
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Synthea generated data
+synthea/output/
+synthea/synthea-with-dependencies.jar
+synthea/*.log
+
+# HAPI FHIR docker volume
+.hapi-data/
+
+# Logs
+*.log
+logs/
+
+# Cloud Build local state
+.gcloudignore.local
+
+# Audit trail (never commit)
+audit/

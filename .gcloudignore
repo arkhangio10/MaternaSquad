@@ -1,0 +1,56 @@
+# Cloud Build source upload exclusions.
+# This file overrides .gitignore for `gcloud builds submit`.
+# Key difference from .gitignore: synthea/output/ is NOT excluded here
+# so Cloud Build can load the pre-generated FHIR bundles into HAPI.
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Virtual environment (never upload - 300 MB+)
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets (handled via Secret Manager)
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+service-account*.json
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Synthea JAR (90 MB, not needed by Cloud Build)
+synthea/synthea-with-dependencies.jar
+synthea/*.log
+
+# HAPI local data volume
+.hapi-data/
+
+# Audit trail (local only, never ship)
+audit/
+*.log
+
+# NOTE: synthea/output/ is intentionally NOT excluded here.
+# Cloud Build loads those FHIR bundles into HAPI in the load-synthea step.

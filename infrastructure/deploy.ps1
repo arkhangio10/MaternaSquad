@@ -45,7 +45,9 @@ try {
 if (-not $secretExists) {
     Write-Host "  Creating secret ANTHROPIC_API_KEY..." -ForegroundColor Yellow
 
-    # Read key from env or .env file
+    # Read key from env or .env file. Trim() removes any trailing CR/LF/whitespace
+    # because PowerShell pipes inject \r\n that httpx will later reject as
+    # "Illegal header value" when the SDK uses the secret as a header.
     $apiKey = $env:ANTHROPIC_API_KEY
     if (-not $apiKey) {
         $envLine = Get-Content .env | Where-Object { $_ -match "^ANTHROPIC_API_KEY=" }
@@ -54,10 +56,19 @@ if (-not $secretExists) {
     if (-not $apiKey) {
         throw "ANTHROPIC_API_KEY not found in environment or .env file"
     }
+    $apiKey = $apiKey.Trim()
 
-    $apiKey | gcloud secrets create ANTHROPIC_API_KEY `
-        --data-file=- `
-        --project=$ProjectId
+    # Write the trimmed key as raw ASCII bytes (no trailing newline) and pass
+    # the file path to gcloud, never a PowerShell pipe.
+    $tmpKey = Join-Path $env:TEMP "anthropic_api_key.bin"
+    [System.IO.File]::WriteAllBytes($tmpKey, [System.Text.Encoding]::ASCII.GetBytes($apiKey))
+    try {
+        gcloud secrets create ANTHROPIC_API_KEY `
+            --data-file=$tmpKey `
+            --project=$ProjectId
+    } finally {
+        Remove-Item $tmpKey -Force -ErrorAction SilentlyContinue
+    }
 } else {
     Write-Host "  Secret already exists." -ForegroundColor Green
 }

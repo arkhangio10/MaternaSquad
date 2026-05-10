@@ -112,7 +112,7 @@ user's language."""
             user_prompt=summary_prompt,
             require_citations=bool(cited),
             temperature=0.2,
-            max_output_tokens=600,
+            max_output_tokens=1500,
         )
     except Exception as e:  # noqa: BLE001
         log.warning("orchestrator.summary_failed", error=str(e))

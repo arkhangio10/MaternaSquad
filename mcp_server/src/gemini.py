@@ -100,7 +100,6 @@ async def generate_structured(
     response = await client.messages.create(
         model=model,
         max_tokens=max_output_tokens,
-        thinking={"type": "adaptive"},
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
         tools=[tool],

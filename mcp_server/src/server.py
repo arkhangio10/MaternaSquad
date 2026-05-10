@@ -62,45 +62,54 @@ Synthetic data only. Every clinical output cites FHIR resource references.""",
 def _ctx_from_request_headers(
     headers: dict[str, str] | None, ctx: Context | None = None
 ) -> SharpContext:
-    """Materialize SHARP context.
+    """Materialize SHARP context with diagnostic logging.
 
-    Resolution order:
-      1. Explicit `headers` dict in the tool arguments (used by our A2A agents
-         which propagate SHARP context as a tool arg).
-      2. The FastMCP `Context` parameter's HTTP request headers (used when Po
-         calls the MCP directly via streamable-http; Po sets
-         `x-fhir-server-url`, `x-fhir-access-token`, `x-patient-id`).
-      3. The `get_http_headers()` dependency as a secondary fallback.
-      4. Local-dev env vars (`DEV_PATIENT_ID`, `FHIR_BASE_URL`,
-         `FHIR_ACCESS_TOKEN`).
+    Resolution order: tool-arg headers, FastMCP Context's HTTP request headers,
+    `get_http_headers()`, and finally env-var defaults.
     """
     if headers:
         try:
             return SharpContext.from_headers(headers)
         except ValueError:
-            pass
+            log.info("ctx.from_headers_arg_missing_keys", keys=sorted(headers.keys()))
 
+    ctx_headers: dict[str, str] = {}
+    ctx_path = "none"
     if ctx is not None:
         try:
-            req = ctx.request_context.request  # type: ignore[union-attr]
-            req_headers = dict(req.headers) if req is not None else {}
-            if req_headers:
-                try:
-                    return SharpContext.from_headers(req_headers)
-                except ValueError:
-                    pass
-        except Exception:  # noqa: BLE001
-            pass
+            rc = ctx.request_context
+            if rc is not None:
+                req = rc.request  # type: ignore[union-attr]
+                if req is not None and hasattr(req, "headers"):
+                    ctx_headers = dict(req.headers)
+                    ctx_path = "ctx.request_context.request.headers"
+        except Exception as e:  # noqa: BLE001
+            log.warning("ctx.request_access_failed", error=str(e))
 
-    try:
-        http_headers = dict(get_http_headers(include_all=True) or {})
-    except Exception:  # noqa: BLE001
-        http_headers = {}
-    if http_headers:
+    if not ctx_headers:
         try:
-            return SharpContext.from_headers(http_headers)
-        except ValueError:
-            pass
+            ctx_headers = dict(get_http_headers(include_all=True) or {})
+            if ctx_headers:
+                ctx_path = "get_http_headers"
+        except Exception:  # noqa: BLE001
+            ctx_headers = {}
+
+    log.info(
+        "ctx.headers_seen",
+        source=ctx_path,
+        ctx_is_none=ctx is None,
+        header_count=len(ctx_headers),
+        header_names=sorted(ctx_headers.keys())[:30],
+        has_x_patient_id="x-patient-id" in ctx_headers,
+        has_x_fhir_server_url="x-fhir-server-url" in ctx_headers,
+        has_x_fhir_access_token="x-fhir-access-token" in ctx_headers,
+    )
+
+    if ctx_headers:
+        try:
+            return SharpContext.from_headers(ctx_headers)
+        except ValueError as e:
+            log.info("ctx.from_headers_validation_failed", reason=str(e))
 
     # Local dev fallback: env vars seed a context for testing without a real EHR.
     return SharpContext(

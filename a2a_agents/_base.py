@@ -144,22 +144,43 @@ def build_app(
 
     @app.get("/.well-known/agent-card.json")
     def get_agent_card(request: Request) -> dict[str, Any]:
+        # Cloud Run terminates TLS upstream so request.url.scheme is "http";
+        # honor X-Forwarded-Proto so the published URL is the real https one.
         base = str(request.base_url).rstrip("/")
-        if agent_card:
-            card = dict(agent_card)
-            card.setdefault("url", base)
-            card["url"] = base
-            return card
+        if request.headers.get("x-forwarded-proto") == "https" and base.startswith(
+            "http://"
+        ):
+            base = "https://" + base[len("http://") :]
+
+        card = agent_card or {}
+        caps = card.get("capabilities", {})
         return {
-            "protocol_version": "0.2.0",
-            "name": f"MaternaSquad {agent_name}",
-            "description": f"MaternaSquad {agent_name}",
+            "protocolVersion": card.get("protocol_version", "0.2.0"),
+            "name": card.get("name", f"MaternaSquad {agent_name}"),
+            "description": card.get("description", f"MaternaSquad {agent_name}"),
             "url": base,
-            "version": "0.1.0",
-            "capabilities": {"streaming": False, "push_notifications": False},
-            "default_input_modes": ["text"],
-            "default_output_modes": ["text"],
-            "skills": [],
+            "version": card.get("version", "0.1.0"),
+            "provider": card.get(
+                "provider",
+                {
+                    "organization": "MaternaSquad",
+                    "url": "https://github.com/arkhangio10/MaternaSquad",
+                },
+            ),
+            "capabilities": {
+                "streaming": caps.get("streaming", False),
+                "pushNotifications": caps.get("push_notifications", False),
+            },
+            "defaultInputModes": card.get(
+                "default_input_modes", ["text/plain", "application/json"]
+            ),
+            "defaultOutputModes": card.get(
+                "default_output_modes", ["application/json"]
+            ),
+            "skills": card.get("skills", []),
+            "supportedInterfaces": [
+                {"transport": "HTTP+JSON", "url": f"{base}/invoke"},
+            ],
         }
 
     @app.post("/invoke", response_model=AgentInvokeResponse)

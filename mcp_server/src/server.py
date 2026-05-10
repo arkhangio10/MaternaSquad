@@ -19,7 +19,6 @@ import structlog
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_http_headers
-from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 from mcp_server.src.audit import write_entry
 from mcp_server.src.sharp.context import SharpContext
@@ -49,50 +48,24 @@ load_dotenv()
 log = structlog.get_logger("maternasquad-mcp")
 
 
-class PoFhirExtensionMiddleware(Middleware):
-    """Declare Prompt Opinion's FHIR context extension on `initialize`.
-
-    Po reads the server's `capabilities.extensions` during the MCP handshake.
-    If the server declares `ai.promptopinion/fhir-context`, Po sends
-    `x-fhir-server-url`, `x-fhir-access-token`, and `x-patient-id` HTTP headers
-    on every tool call. Without this declaration, Po sends only `x-patient-id`,
-    leaving the MCP unable to query the workspace FHIR proxy.
-
-    Spec: https://docs.promptopinion.ai/fhir-context/mcp-fhir-context
-    """
-
-    EXTENSION_ID = "ai.promptopinion/fhir-context"
-
-    SCOPES: list[dict[str, Any]] = [
-        # Required scopes - enable the squad's core risk + chart functions.
-        {"name": "patient/Patient.rs", "required": True},
-        {"name": "patient/Condition.rs", "required": True},
-        {"name": "patient/Observation.rs", "required": True},
-        # Optional scopes - prior auth + history features need these.
-        {"name": "patient/MedicationRequest.rs"},
-        {"name": "patient/MedicationStatement.rs"},
-        {"name": "patient/Encounter.rs"},
-        {"name": "patient/CarePlan.rs"},
-        {"name": "patient/DocumentReference.rs"},
-        {"name": "patient/ServiceRequest.rs"},
-        {"name": "patient/Coverage.rs"},
-    ]
-
-    async def on_initialize(self, context: MiddlewareContext, call_next):  # type: ignore[no-untyped-def]
-        result = await call_next(context)
-        if result is None:
-            return result
-        try:
-            existing = getattr(result.capabilities, "extensions", None) or {}
-            result.capabilities.extensions = {
-                **existing,
-                self.EXTENSION_ID: {"scopes": self.SCOPES},
-            }
-            log.info("po.fhir_extension_declared", scopes=len(self.SCOPES))
-        except Exception as e:  # noqa: BLE001
-            log.warning("po.fhir_extension_declare_failed", error=str(e))
-        return result
-
+# Prompt Opinion FHIR context extension - declared in our MCP capabilities so
+# Po sends `x-fhir-server-url`, `x-fhir-access-token`, and `x-patient-id` HTTP
+# headers on every tool call. Without it, Po sends only `x-patient-id` and the
+# MCP cannot query the workspace FHIR proxy.
+# Spec: https://docs.promptopinion.ai/fhir-context/mcp-fhir-context
+PO_FHIR_EXTENSION_ID = "ai.promptopinion/fhir-context"
+PO_FHIR_EXTENSION_SCOPES: list[dict[str, Any]] = [
+    {"name": "patient/Patient.rs", "required": True},
+    {"name": "patient/Condition.rs", "required": True},
+    {"name": "patient/Observation.rs", "required": True},
+    {"name": "patient/MedicationRequest.rs"},
+    {"name": "patient/MedicationStatement.rs"},
+    {"name": "patient/Encounter.rs"},
+    {"name": "patient/CarePlan.rs"},
+    {"name": "patient/DocumentReference.rs"},
+    {"name": "patient/ServiceRequest.rs"},
+    {"name": "patient/Coverage.rs"},
+]
 
 mcp: FastMCP = FastMCP(
     name="maternasquad-mcp",
@@ -104,8 +77,28 @@ from our internal A2A agents, or via Prompt Opinion's FHIR context extension
 and x-patient-id on every tool call.
 
 Synthetic data only. Every clinical output cites FHIR resource references.""",
-    middleware=[PoFhirExtensionMiddleware()],
 )
+
+
+# Monkey-patch FastMCP's low-level server to inject the Po FHIR extension into
+# the InitializeResult. The on_initialize middleware hook cannot mutate the
+# response because the MCP SDK sends it before middleware sees it; patching
+# `get_capabilities` is the documented escape hatch.
+_LL_SERVER = mcp._mcp_server
+_ORIGINAL_GET_CAPS = _LL_SERVER.get_capabilities
+
+
+def _patched_get_capabilities(notification_options, experimental_capabilities):  # type: ignore[no-untyped-def]
+    caps = _ORIGINAL_GET_CAPS(notification_options, experimental_capabilities)
+    existing = getattr(caps, "extensions", None) or {}
+    caps.extensions = {
+        **existing,
+        PO_FHIR_EXTENSION_ID: {"scopes": PO_FHIR_EXTENSION_SCOPES},
+    }
+    return caps
+
+
+_LL_SERVER.get_capabilities = _patched_get_capabilities  # type: ignore[method-assign]
 
 
 def _ctx_from_request_headers(

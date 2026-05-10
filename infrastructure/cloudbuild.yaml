@@ -23,7 +23,8 @@ timeout: 3600s
 
 steps:
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 1: Build all images in parallel
+  # Phase 1a: Pull base images once to warm Docker cache and avoid rate limits.
+  # HAPI pull runs in parallel with the Python base image pull.
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   - id: pull-hapi
@@ -31,9 +32,19 @@ steps:
     waitFor: ['-']
     args: [pull, hapiproject/hapi:latest]
 
-  - id: build-mcp
+  - id: pull-python
     name: gcr.io/cloud-builders/docker
     waitFor: ['-']
+    args: [pull, python:3.11-slim]
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # Phase 1b: Build Python images sequentially (share the cached base layer).
+  # Sequential avoids disk exhaustion from parallel pip installs.
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - id: build-mcp
+    name: gcr.io/cloud-builders/docker
+    waitFor: [pull-python]
     args:
       - build
       - -f
@@ -42,24 +53,9 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-mcp:latest
       - .
 
-  - id: build-orchestrator
-    name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
-    args:
-      - build
-      - -f
-      - infrastructure/Dockerfile.agent
-      - --build-arg
-      - AGENT_MODULE=a2a_agents.orchestrator.agent
-      - --build-arg
-      - AGENT_PORT=8080
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-orchestrator:latest
-      - .
-
   - id: build-risk-agent
     name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
+    waitFor: [build-mcp]
     args:
       - build
       - -f
@@ -74,7 +70,7 @@ steps:
 
   - id: build-coverage-agent
     name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
+    waitFor: [build-risk-agent]
     args:
       - build
       - -f
@@ -89,7 +85,7 @@ steps:
 
   - id: build-education-agent
     name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
+    waitFor: [build-coverage-agent]
     args:
       - build
       - -f
@@ -104,7 +100,7 @@ steps:
 
   - id: build-postpartum-watch
     name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
+    waitFor: [build-education-agent]
     args:
       - build
       - -f
@@ -117,8 +113,23 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-postpartum-watch:latest
       - .
 
+  - id: build-orchestrator
+    name: gcr.io/cloud-builders/docker
+    waitFor: [build-postpartum-watch]
+    args:
+      - build
+      - -f
+      - infrastructure/Dockerfile.agent
+      - --build-arg
+      - AGENT_MODULE=a2a_agents.orchestrator.agent
+      - --build-arg
+      - AGENT_PORT=8080
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-orchestrator:latest
+      - .
+
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 2: Push images (each after its own build completes)
+  # Phase 2: Push all images in parallel (builds are done, pushing is I/O only)
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   - id: push-hapi
@@ -133,47 +144,19 @@ steps:
         docker push \
           ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-hapi:latest
 
-  - id: push-mcp
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-mcp]
-    args:
-      - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-mcp:latest
-
-  - id: push-orchestrator
+  - id: push-python-images
     name: gcr.io/cloud-builders/docker
     waitFor: [build-orchestrator]
+    entrypoint: bash
     args:
-      - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-orchestrator:latest
-
-  - id: push-risk-agent
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-risk-agent]
-    args:
-      - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-risk-agent:latest
-
-  - id: push-coverage-agent
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-coverage-agent]
-    args:
-      - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-coverage-agent:latest
-
-  - id: push-education-agent
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-education-agent]
-    args:
-      - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-education-agent:latest
-
-  - id: push-postpartum-watch
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-postpartum-watch]
-    args:
-      - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-postpartum-watch:latest
+      - -c
+      - |
+        set -e
+        for svc in maternasquad-mcp maternasquad-orchestrator maternasquad-risk-agent \
+                   maternasquad-coverage-agent maternasquad-education-agent maternasquad-postpartum-watch; do
+          echo "Pushing ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$$svc:latest ..."
+          docker push ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$$svc:latest
+        done
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   # Phase 3: Deploy HAPI with min-instances=1 to keep data in memory
@@ -263,7 +246,7 @@ steps:
 
   - id: deploy-mcp
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-mcp, load-synthea]
+    waitFor: [push-python-images, load-synthea]
     entrypoint: bash
     args:
       - -c
@@ -295,7 +278,7 @@ steps:
 
   - id: deploy-risk-agent
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-risk-agent, deploy-mcp]
+    waitFor: [push-python-images, deploy-mcp]
     entrypoint: bash
     args:
       - -c
@@ -323,7 +306,7 @@ steps:
 
   - id: deploy-coverage-agent
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-coverage-agent, deploy-mcp]
+    waitFor: [push-python-images, deploy-mcp]
     entrypoint: bash
     args:
       - -c
@@ -351,7 +334,7 @@ steps:
 
   - id: deploy-education-agent
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-education-agent, deploy-mcp]
+    waitFor: [push-python-images, deploy-mcp]
     entrypoint: bash
     args:
       - -c
@@ -379,7 +362,7 @@ steps:
 
   - id: deploy-postpartum-watch
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-postpartum-watch, deploy-mcp]
+    waitFor: [push-python-images, deploy-mcp]
     entrypoint: bash
     args:
       - -c
@@ -412,7 +395,7 @@ steps:
   - id: deploy-orchestrator
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     waitFor:
-      - push-orchestrator
+      - push-python-images
       - deploy-risk-agent
       - deploy-coverage-agent
       - deploy-education-agent

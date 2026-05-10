@@ -330,3 +330,33 @@ steps:
         echo "  Coverage agent:   $$COVERAGE_URL"
         echo "  Education agent:  $$EDUCATION_URL"
         echo "  Postpartum watch: $$POSTPARTUM_URL"
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # Step 7: Force public access on every service.
+  # --allow-unauthenticated above is unreliable from the cloud-sdk builder,
+  # so we set IAM explicitly here. Idempotent.
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - id: make-public
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    waitFor: [deploy-orchestrator]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        for svc in maternasquad-hapi \
+                   maternasquad-mcp \
+                   maternasquad-risk-agent \
+                   maternasquad-coverage-agent \
+                   maternasquad-education-agent \
+                   maternasquad-postpartum-watch \
+                   maternasquad-orchestrator; do
+          echo ">>> granting allUsers/run.invoker on $$svc"
+          gcloud run services add-iam-policy-binding "$$svc" \
+            --region=${_REGION} \
+            --member=allUsers \
+            --role=roles/run.invoker \
+            --quiet > /dev/null
+        done
+        echo "All services are now publicly invokable."

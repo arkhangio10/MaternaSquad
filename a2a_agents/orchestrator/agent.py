@@ -126,7 +126,62 @@ user's language."""
     }
 
 
-app = build_app(agent_name="orchestrator", invoke_handler=_invoke_handler)
+AGENT_CARD = {
+    "protocol_version": "0.2.0",
+    "name": "MaternaSquad Orchestrator",
+    "description": (
+        "Plan, route, and merge specialist agents (risk, coverage, education, "
+        "postpartum watch) for a maternal-care patient question. Returns a "
+        "cited clinician handoff in the user's language."
+    ),
+    "version": "0.1.0",
+    "provider": {"organization": "MaternaSquad", "url": "https://github.com/arkhangio10/MaternaSquad"},
+    "capabilities": {"streaming": False, "push_notifications": False},
+    "default_input_modes": ["text/plain", "application/json"],
+    "default_output_modes": ["application/json", "text/markdown"],
+    "skills": [
+        {
+            "id": "third_trimester_setup",
+            "name": "Third trimester setup",
+            "description": (
+                "Compose a third-trimester surveillance plan for a pregnant "
+                "patient. Routes to risk + education + postpartum watch."
+            ),
+            "tags": ["maternal-health", "third-trimester", "preeclampsia", "ACOG"],
+            "examples": [
+                "Set up this patient for the third trimester. She has been complaining about headaches.",
+                "Run a routine third-trimester checkup."
+            ],
+        },
+        {
+            "id": "postpartum_triage",
+            "name": "Postpartum symptom triage",
+            "description": (
+                "Triage a postpartum symptom complaint against CDC Hear Her "
+                "warning signs and draft an SBAR escalation."
+            ),
+            "tags": ["maternal-health", "postpartum", "CDC-Hear-Her", "triage"],
+            "examples": [
+                "Patient is 4 weeks postpartum and reports feeling very sad."
+            ],
+        },
+        {
+            "id": "patient_education",
+            "name": "Patient-facing education",
+            "description": "Generate locale-aware patient education and warning-signs cards at grade 5 reading level.",
+            "tags": ["maternal-health", "patient-education", "multilingual"],
+            "examples": [
+                "Generate the patient-facing education card for this patient. Locale es-US."
+            ],
+        },
+    ],
+}
+
+app = build_app(
+    agent_name="orchestrator",
+    invoke_handler=_invoke_handler,
+    agent_card=AGENT_CARD,
+)
 
 
 if __name__ == "__main__":

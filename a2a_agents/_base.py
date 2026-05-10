@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from mcp_server.src.audit import write_entry
@@ -128,13 +128,39 @@ def build_app(
     *,
     agent_name: str,
     invoke_handler: Any,
+    agent_card: dict[str, Any] | None = None,
 ) -> FastAPI:
-    """Build a FastAPI app exposing the standard A2A invoke endpoint."""
+    """Build a FastAPI app exposing the standard A2A invoke endpoint.
+
+    `agent_card` is the A2A protocol agent metadata. The `url` field is
+    filled at request time from the public base URL the request arrived on,
+    so the same code works locally on http://localhost:8001 and on Cloud Run.
+    """
     app = FastAPI(title=agent_name, version="0.1.0")
 
     @app.get("/healthcheck")
     def healthcheck() -> dict[str, str]:
         return {"agent": agent_name, "status": "ok"}
+
+    @app.get("/.well-known/agent-card.json")
+    def get_agent_card(request: Request) -> dict[str, Any]:
+        base = str(request.base_url).rstrip("/")
+        if agent_card:
+            card = dict(agent_card)
+            card.setdefault("url", base)
+            card["url"] = base
+            return card
+        return {
+            "protocol_version": "0.2.0",
+            "name": f"MaternaSquad {agent_name}",
+            "description": f"MaternaSquad {agent_name}",
+            "url": base,
+            "version": "0.1.0",
+            "capabilities": {"streaming": False, "push_notifications": False},
+            "default_input_modes": ["text"],
+            "default_output_modes": ["text"],
+            "skills": [],
+        }
 
     @app.post("/invoke", response_model=AgentInvokeResponse)
     async def invoke(

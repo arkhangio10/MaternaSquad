@@ -66,7 +66,41 @@ def _summarize(pregnancy: dict[str, Any]) -> str:
     return "; ".join(summary_parts)
 
 
-app = build_app(agent_name="coverage_agent", invoke_handler=_invoke_handler)
+AGENT_CARD = {
+    "protocol_version": "0.2.0",
+    "name": "MaternaSquad Coverage Agent",
+    "description": (
+        "Drafts prior-authorization evidence packets shaped to the HL7 Da Vinci "
+        "PAS implementation guide. Includes a cited medical-necessity narrative "
+        "and a predicted denial-risk tier. Clinician-in-the-loop."
+    ),
+    "version": "0.1.0",
+    "provider": {"organization": "MaternaSquad", "url": "https://github.com/arkhangio10/MaternaSquad"},
+    "capabilities": {"streaming": False, "push_notifications": False},
+    "default_input_modes": ["application/json"],
+    "default_output_modes": ["application/json"],
+    "skills": [
+        {
+            "id": "draft_pa_packet",
+            "name": "Draft prior-auth packet",
+            "description": (
+                "Drafts a Da Vinci PAS-shaped Bundle for a maternal-care service "
+                "request (home BP monitor, glucometer, MRI, etc.) with FHIR-cited "
+                "medical-necessity narrative."
+            ),
+            "tags": ["prior-authorization", "Da-Vinci-PAS", "maternal-health"],
+            "examples": [
+                "Draft the prior-auth packet for the home BP monitor request on this patient."
+            ],
+        }
+    ],
+}
+
+app = build_app(
+    agent_name="coverage_agent",
+    invoke_handler=_invoke_handler,
+    agent_card=AGENT_CARD,
+)
 
 
 if __name__ == "__main__":

@@ -69,7 +69,43 @@ def _route_role(urgency: str) -> str:
     return "routine-callback-pool"
 
 
-app = build_app(agent_name="postpartum_watch_agent", invoke_handler=_invoke_handler)
+AGENT_CARD = {
+    "protocol_version": "0.2.0",
+    "name": "MaternaSquad Postpartum Watch",
+    "description": (
+        "Triages postpartum patient messages against the CDC Hear Her urgent "
+        "maternal warning signs checklist. Returns a structured urgency tier, "
+        "the matched warning signs with FHIR citations, and an SBAR draft for "
+        "the on-call clinician."
+    ),
+    "version": "0.1.0",
+    "provider": {"organization": "MaternaSquad", "url": "https://github.com/arkhangio10/MaternaSquad"},
+    "capabilities": {"streaming": False, "push_notifications": False},
+    "default_input_modes": ["text/plain", "application/json"],
+    "default_output_modes": ["application/json"],
+    "skills": [
+        {
+            "id": "postpartum_triage",
+            "name": "Postpartum symptom triage",
+            "description": (
+                "Match a postpartum symptom message to CDC Hear Her warning "
+                "signs and return urgency tier (safe_routine, urgent_clinic_today, "
+                "urgent_clinic_now, emergency_911) plus an SBAR draft."
+            ),
+            "tags": ["postpartum", "CDC-Hear-Her", "triage", "SBAR"],
+            "examples": [
+                "Patient at 2 AM: Me duele mucho la cabeza, no puedo ver bien.",
+                "4 weeks postpartum, reports feeling very sad and disconnected from baby."
+            ],
+        }
+    ],
+}
+
+app = build_app(
+    agent_name="postpartum_watch_agent",
+    invoke_handler=_invoke_handler,
+    agent_card=AGENT_CARD,
+)
 
 
 if __name__ == "__main__":

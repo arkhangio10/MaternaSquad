@@ -63,7 +63,47 @@ async def _invoke_handler(
     }
 
 
-app = build_app(agent_name="education_agent", invoke_handler=_invoke_handler)
+AGENT_CARD = {
+    "protocol_version": "0.2.0",
+    "name": "MaternaSquad Education Agent",
+    "description": (
+        "Generates patient-facing education and warning-signs material at "
+        "grade-5 reading level in the patient's locale (en-US, es-US confirmed). "
+        "Always cites FHIR Conditions / Observations / MedicationRequests and "
+        "returns the English back-translation for clinician review."
+    ),
+    "version": "0.1.0",
+    "provider": {"organization": "MaternaSquad", "url": "https://github.com/arkhangio10/MaternaSquad"},
+    "capabilities": {"streaming": False, "push_notifications": False},
+    "default_input_modes": ["text/plain", "application/json"],
+    "default_output_modes": ["application/json"],
+    "skills": [
+        {
+            "id": "patient_translate_message",
+            "name": "Patient education message",
+            "description": "Produce a plain-language patient message about the patient's care plan, with FHIR citations.",
+            "tags": ["patient-education", "multilingual", "grade-5"],
+            "examples": [
+                "Generate the patient education message about her current pregnancy plan."
+            ],
+        },
+        {
+            "id": "warning_signs_card",
+            "name": "Warning-signs card",
+            "description": "Localized warning-signs card the patient can keep on a phone or print.",
+            "tags": ["patient-education", "warning-signs", "CDC-Hear-Her"],
+            "examples": [
+                "Create the postpartum warning signs card. Locale es-US."
+            ],
+        },
+    ],
+}
+
+app = build_app(
+    agent_name="education_agent",
+    invoke_handler=_invoke_handler,
+    agent_card=AGENT_CARD,
+)
 
 
 if __name__ == "__main__":

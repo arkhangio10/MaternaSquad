@@ -97,7 +97,7 @@ Write-Host ""
 Write-Host "Submitting Cloud Build (~15 to 20 minutes)..." -ForegroundColor Yellow
 gcloud builds submit `
     --config infrastructure/cloudbuild.yaml `
-    --substitutions=_REGION=$Region,_REPO=$Repo `
+    "--substitutions=_REGION=$Region,_REPO=$Repo" `
     --project=$ProjectId `
     .
 

@@ -68,24 +68,38 @@ class SharpContext(BaseModel):
     def from_headers(cls, headers: dict[str, str]) -> SharpContext:
         """Parse SHARP context from inbound HTTP headers.
 
-        Header lookup is case-insensitive: we normalize before matching.
+        Header lookup is case-insensitive. Accepts the Prompt Opinion FHIR
+        context headers (`X-FHIR-Server-URL`, `X-FHIR-Access-Token`,
+        `X-Patient-ID`) as fallbacks for the SHARP variants, so the same MCP
+        works whether called by our own A2A agents (SHARP headers) or by Po
+        (FHIR-context headers).
         """
         norm = {k.lower(): v for k, v in headers.items()}
 
-        def get(name: str) -> str | None:
-            return norm.get(name.lower())
+        def get(*names: str) -> str | None:
+            for n in names:
+                v = norm.get(n.lower())
+                if v:
+                    return v
+            return None
 
-        patient_id = get(HEADER_PATIENT_ID)
-        fhir_server_url = get(HEADER_FHIR_SERVER_URL)
+        patient_id = get(HEADER_PATIENT_ID, "x-patient-id")
+        fhir_server_url = get(HEADER_FHIR_SERVER_URL, "x-fhir-server-url")
         if not patient_id or not fhir_server_url:
             raise ValueError(
-                f"Missing required SHARP headers: {HEADER_PATIENT_ID}, {HEADER_FHIR_SERVER_URL}"
+                "Missing FHIR context: need either SHARP headers "
+                f"({HEADER_PATIENT_ID} + {HEADER_FHIR_SERVER_URL}) "
+                "or Prompt Opinion headers (x-patient-id + x-fhir-server-url)."
             )
+
+        access_token = get(HEADER_FHIR_ACCESS_TOKEN, "x-fhir-access-token")
+        if access_token and access_token.lower().startswith("bearer "):
+            access_token = access_token[7:].strip()
 
         return cls(
             patient_id=patient_id,
             fhir_server_url=fhir_server_url,
-            fhir_access_token=get(HEADER_FHIR_ACCESS_TOKEN),
+            fhir_access_token=access_token,
             encounter_id=get(HEADER_ENCOUNTER_ID),
             user_role=get(HEADER_USER_ROLE) or "clinician",  # type: ignore[arg-type]
             trace_id=get(HEADER_TRACE_ID) or str(uuid.uuid4()),

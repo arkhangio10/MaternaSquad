@@ -18,6 +18,7 @@ from typing import Any
 import structlog
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_headers
 
 from mcp_server.src.audit import write_entry
 from mcp_server.src.sharp.context import SharpContext
@@ -59,10 +60,28 @@ Synthetic data only. Every clinical output cites FHIR resource references.""",
 
 
 def _ctx_from_request_headers(headers: dict[str, str] | None) -> SharpContext:
-    """Materialize SHARP context from headers, falling back to env defaults for local dev."""
+    """Materialize SHARP context.
+
+    Resolution order:
+      1. Explicit `headers` dict in the tool arguments (used by our A2A agents
+         which propagate SHARP context as a tool arg).
+      2. The current HTTP request headers (used when Po calls the MCP directly;
+         it sets `x-fhir-server-url`, `x-fhir-access-token`, `x-patient-id`).
+      3. Local-dev env vars (`DEV_PATIENT_ID`, `FHIR_BASE_URL`,
+         `FHIR_ACCESS_TOKEN`).
+    """
     if headers:
         try:
             return SharpContext.from_headers(headers)
+        except ValueError:
+            pass
+    try:
+        http_headers = dict(get_http_headers(include_all=True) or {})
+    except Exception:  # noqa: BLE001
+        http_headers = {}
+    if http_headers:
+        try:
+            return SharpContext.from_headers(http_headers)
         except ValueError:
             pass
     # Local dev fallback: env vars seed a context for testing without a real EHR.

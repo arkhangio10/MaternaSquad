@@ -1,15 +1,9 @@
 # MaternaSquad Cloud Build pipeline.
-# Run via: .\infrastructure\deploy.ps1  (gcloud builds submit)
+# Run via: .\infrastructure\deploy.ps1
 # Substitutions passed by deploy.ps1: _REGION, _REPO
 #
-# Pipeline:
-#   Phase 1 (parallel): pull/build all 7 images
-#   Phase 2 (each after own build): push images
-#   Phase 3: deploy HAPI
-#   Phase 4: load Synthea bundles into HAPI
-#   Phase 5: deploy MCP (gets HAPI URL)
-#   Phase 6 (parallel): deploy 4 sub-agents (get MCP URL)
-#   Phase 7: deploy orchestrator (gets all sub-agent URLs)
+# All Docker work runs in one bash step to avoid inter-step daemon issues.
+# gcloud deploy steps follow after images are pushed.
 
 substitutions:
   _REGION: europe-west4
@@ -23,148 +17,77 @@ timeout: 3600s
 
 steps:
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 1a: Pull base images once to warm Docker cache and avoid rate limits.
-  # HAPI pull runs in parallel with the Python base image pull.
+  # Step 1: Build and push all 7 images in a single bash session.
+  # Sequential builds share the pip layer cache so agent images are fast.
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  - id: pull-hapi
+  - id: build-and-push-images
     name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
-    args: [pull, hapiproject/hapi:latest]
-
-  - id: pull-python
-    name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
-    args: [pull, python:3.11-slim]
-
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 1b: Build Python images sequentially (share the cached base layer).
-  # Sequential avoids disk exhaustion from parallel pip installs.
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  - id: build-mcp
-    name: gcr.io/cloud-builders/docker
-    waitFor: [pull-python]
-    args:
-      - build
-      - -f
-      - infrastructure/Dockerfile.mcp
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-mcp:latest
-      - .
-
-  - id: build-risk-agent
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-mcp]
-    args:
-      - build
-      - -f
-      - infrastructure/Dockerfile.agent
-      - --build-arg
-      - AGENT_MODULE=a2a_agents.risk_agent.agent
-      - --build-arg
-      - AGENT_PORT=8080
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-risk-agent:latest
-      - .
-
-  - id: build-coverage-agent
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-risk-agent]
-    args:
-      - build
-      - -f
-      - infrastructure/Dockerfile.agent
-      - --build-arg
-      - AGENT_MODULE=a2a_agents.coverage_agent.agent
-      - --build-arg
-      - AGENT_PORT=8080
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-coverage-agent:latest
-      - .
-
-  - id: build-education-agent
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-coverage-agent]
-    args:
-      - build
-      - -f
-      - infrastructure/Dockerfile.agent
-      - --build-arg
-      - AGENT_MODULE=a2a_agents.education_agent.agent
-      - --build-arg
-      - AGENT_PORT=8080
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-education-agent:latest
-      - .
-
-  - id: build-postpartum-watch
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-education-agent]
-    args:
-      - build
-      - -f
-      - infrastructure/Dockerfile.agent
-      - --build-arg
-      - AGENT_MODULE=a2a_agents.postpartum_watch.agent
-      - --build-arg
-      - AGENT_PORT=8080
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-postpartum-watch:latest
-      - .
-
-  - id: build-orchestrator
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-postpartum-watch]
-    args:
-      - build
-      - -f
-      - infrastructure/Dockerfile.agent
-      - --build-arg
-      - AGENT_MODULE=a2a_agents.orchestrator.agent
-      - --build-arg
-      - AGENT_PORT=8080
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-orchestrator:latest
-      - .
-
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 2: Push all images in parallel (builds are done, pushing is I/O only)
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  - id: push-hapi
-    name: gcr.io/cloud-builders/docker
-    waitFor: [pull-hapi]
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        docker tag hapiproject/hapi:latest \
-          ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-hapi:latest
-        docker push \
-          ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-hapi:latest
-
-  - id: push-python-images
-    name: gcr.io/cloud-builders/docker
-    waitFor: [build-orchestrator]
+    timeout: 2400s
     entrypoint: bash
     args:
       - -c
       - |
         set -e
-        for svc in maternasquad-mcp maternasquad-orchestrator maternasquad-risk-agent \
-                   maternasquad-coverage-agent maternasquad-education-agent maternasquad-postpartum-watch; do
-          echo "Pushing ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$$svc:latest ..."
-          docker push ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$$svc:latest
-        done
+        REG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}"
+
+        echo ">>> Pulling base images..."
+        docker pull python:3.11-slim
+        docker pull hapiproject/hapi:latest
+
+        echo ">>> HAPI mirror..."
+        docker tag hapiproject/hapi:latest "$$REG/maternasquad-hapi:latest"
+        docker push "$$REG/maternasquad-hapi:latest"
+
+        echo ">>> MCP server..."
+        docker build -f infrastructure/Dockerfile.mcp \
+          -t "$$REG/maternasquad-mcp:latest" .
+        docker push "$$REG/maternasquad-mcp:latest"
+
+        echo ">>> Risk agent..."
+        docker build -f infrastructure/Dockerfile.agent \
+          --build-arg AGENT_MODULE=a2a_agents.risk_agent.agent \
+          --build-arg AGENT_PORT=8080 \
+          -t "$$REG/maternasquad-risk-agent:latest" .
+        docker push "$$REG/maternasquad-risk-agent:latest"
+
+        echo ">>> Coverage agent..."
+        docker build -f infrastructure/Dockerfile.agent \
+          --build-arg AGENT_MODULE=a2a_agents.coverage_agent.agent \
+          --build-arg AGENT_PORT=8080 \
+          -t "$$REG/maternasquad-coverage-agent:latest" .
+        docker push "$$REG/maternasquad-coverage-agent:latest"
+
+        echo ">>> Education agent..."
+        docker build -f infrastructure/Dockerfile.agent \
+          --build-arg AGENT_MODULE=a2a_agents.education_agent.agent \
+          --build-arg AGENT_PORT=8080 \
+          -t "$$REG/maternasquad-education-agent:latest" .
+        docker push "$$REG/maternasquad-education-agent:latest"
+
+        echo ">>> Postpartum watch agent..."
+        docker build -f infrastructure/Dockerfile.agent \
+          --build-arg AGENT_MODULE=a2a_agents.postpartum_watch.agent \
+          --build-arg AGENT_PORT=8080 \
+          -t "$$REG/maternasquad-postpartum-watch:latest" .
+        docker push "$$REG/maternasquad-postpartum-watch:latest"
+
+        echo ">>> Orchestrator..."
+        docker build -f infrastructure/Dockerfile.agent \
+          --build-arg AGENT_MODULE=a2a_agents.orchestrator.agent \
+          --build-arg AGENT_PORT=8080 \
+          -t "$$REG/maternasquad-orchestrator:latest" .
+        docker push "$$REG/maternasquad-orchestrator:latest"
+
+        echo ">>> All images pushed."
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 3: Deploy HAPI with min-instances=1 to keep data in memory
+  # Step 2: Deploy HAPI with min-instances=1 to keep Synthea data in memory.
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   - id: deploy-hapi
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-hapi]
+    waitFor: [build-and-push-images]
     entrypoint: gcloud
     args:
       - run
@@ -183,7 +106,7 @@ steps:
       - --quiet
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 4: Load Synthea bundles into HAPI (two-pass: refs then patients)
+  # Step 3: Load Synthea FHIR bundles into HAPI (two-pass: refs then patients).
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   - id: load-synthea
@@ -200,26 +123,28 @@ steps:
         echo "$$HAPI_URL" > /workspace/hapi_url.txt
         echo "HAPI URL: $$HAPI_URL"
 
-        echo "Waiting for HAPI to be ready (up to 5 minutes)..."
+        echo "Waiting for HAPI (up to 5 min)..."
         for i in $(seq 1 30); do
           if curl -sf "$$FHIR_BASE/metadata" > /dev/null 2>&1; then
-            echo "HAPI is ready after $$i checks."
+            echo "HAPI ready after $$i checks."
             break
           fi
           echo "  attempt $$i/30, sleeping 10s..."
           sleep 10
         done
-        curl -sf "$$FHIR_BASE/metadata" > /dev/null || { echo "HAPI never became ready."; exit 1; }
+        curl -sf "$$FHIR_BASE/metadata" > /dev/null \
+          || { echo "HAPI never became ready. Exiting."; exit 1; }
 
         BUNDLE_DIR="synthea/output/fhir"
         if [ ! -d "$$BUNDLE_DIR" ]; then
-          echo "ERROR: $$BUNDLE_DIR not found. Run .\synthea\generate_personas.ps1 and check .gcloudignore."
+          echo "ERROR: $$BUNDLE_DIR missing from build context."
+          echo "Run .\synthea\generate_personas.ps1 locally first."
           exit 1
         fi
 
         shopt -s nullglob
 
-        echo "Pass 1: loading hospital and practitioner reference resources..."
+        echo "Pass 1: reference resources..."
         for f in "$$BUNDLE_DIR"/hospitalInformation*.json \
                   "$$BUNDLE_DIR"/practitionerInformation*.json; do
           echo "  $$f"
@@ -228,7 +153,7 @@ steps:
             --data-binary "@$$f" > /dev/null
         done
 
-        echo "Pass 2: loading patient bundles..."
+        echo "Pass 2: patient bundles..."
         for f in "$$BUNDLE_DIR"/*.json; do
           [[ "$$f" == *hospitalInformation* ]] && continue
           [[ "$$f" == *practitionerInformation* ]] && continue
@@ -237,16 +162,15 @@ steps:
             -H 'Content-Type: application/fhir+json' \
             --data-binary "@$$f" > /dev/null
         done
-
-        echo "Synthea bundles loaded into HAPI."
+        echo "Synthea bundles loaded."
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 5: Deploy MCP server
+  # Step 4: Deploy MCP server (knows HAPI URL).
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   - id: deploy-mcp
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-python-images, load-synthea]
+    waitFor: [load-synthea]
     entrypoint: bash
     args:
       - -c
@@ -255,30 +179,25 @@ steps:
         HAPI_URL=$(cat /workspace/hapi_url.txt)
         gcloud run deploy maternasquad-mcp \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-mcp:latest \
-          --region=${_REGION} \
-          --platform=managed \
+          --region=${_REGION} --platform=managed \
           --allow-unauthenticated \
-          --min-instances=0 \
-          --max-instances=5 \
-          --memory=1Gi \
-          --cpu=1 \
-          --port=8080 \
-          --timeout=120 \
+          --min-instances=0 --max-instances=5 \
+          --memory=1Gi --cpu=1 --port=8080 --timeout=120 \
           --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest \
           --set-env-vars="FHIR_BASE_URL=$$HAPI_URL/fhir,MCP_SERVER_PORT=8080,CLAUDE_MODEL=claude-sonnet-4-6" \
           --quiet
         MCP_URL=$(gcloud run services describe maternasquad-mcp \
           --region=${_REGION} --format='value(status.url)' --quiet)
         echo "$$MCP_URL" > /workspace/mcp_url.txt
-        echo "MCP URL: $$MCP_URL"
+        echo "MCP: $$MCP_URL"
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 6: Deploy 4 sub-agents in parallel (each needs MCP URL)
+  # Step 5: Deploy 4 sub-agents in parallel (all need MCP URL).
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   - id: deploy-risk-agent
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-python-images, deploy-mcp]
+    waitFor: [deploy-mcp]
     entrypoint: bash
     args:
       - -c
@@ -287,26 +206,21 @@ steps:
         MCP_URL=$(cat /workspace/mcp_url.txt)
         gcloud run deploy maternasquad-risk-agent \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-risk-agent:latest \
-          --region=${_REGION} \
-          --platform=managed \
+          --region=${_REGION} --platform=managed \
           --allow-unauthenticated \
-          --min-instances=0 \
-          --max-instances=5 \
-          --memory=512Mi \
-          --cpu=1 \
-          --port=8080 \
-          --timeout=120 \
+          --min-instances=0 --max-instances=5 \
+          --memory=512Mi --cpu=1 --port=8080 --timeout=120 \
           --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest \
           --set-env-vars="MCP_BASE_URL=$$MCP_URL,RISK_AGENT_PORT=8080,CLAUDE_MODEL=claude-sonnet-4-6" \
           --quiet
-        RISK_URL=$(gcloud run services describe maternasquad-risk-agent \
+        URL=$(gcloud run services describe maternasquad-risk-agent \
           --region=${_REGION} --format='value(status.url)' --quiet)
-        echo "$$RISK_URL" > /workspace/risk_url.txt
-        echo "Risk agent URL: $$RISK_URL"
+        echo "$$URL" > /workspace/risk_url.txt
+        echo "Risk: $$URL"
 
   - id: deploy-coverage-agent
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-python-images, deploy-mcp]
+    waitFor: [deploy-mcp]
     entrypoint: bash
     args:
       - -c
@@ -315,26 +229,21 @@ steps:
         MCP_URL=$(cat /workspace/mcp_url.txt)
         gcloud run deploy maternasquad-coverage-agent \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-coverage-agent:latest \
-          --region=${_REGION} \
-          --platform=managed \
+          --region=${_REGION} --platform=managed \
           --allow-unauthenticated \
-          --min-instances=0 \
-          --max-instances=5 \
-          --memory=512Mi \
-          --cpu=1 \
-          --port=8080 \
-          --timeout=120 \
+          --min-instances=0 --max-instances=5 \
+          --memory=512Mi --cpu=1 --port=8080 --timeout=120 \
           --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest \
           --set-env-vars="MCP_BASE_URL=$$MCP_URL,COVERAGE_AGENT_PORT=8080,CLAUDE_MODEL=claude-sonnet-4-6" \
           --quiet
-        COVERAGE_URL=$(gcloud run services describe maternasquad-coverage-agent \
+        URL=$(gcloud run services describe maternasquad-coverage-agent \
           --region=${_REGION} --format='value(status.url)' --quiet)
-        echo "$$COVERAGE_URL" > /workspace/coverage_url.txt
-        echo "Coverage agent URL: $$COVERAGE_URL"
+        echo "$$URL" > /workspace/coverage_url.txt
+        echo "Coverage: $$URL"
 
   - id: deploy-education-agent
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-python-images, deploy-mcp]
+    waitFor: [deploy-mcp]
     entrypoint: bash
     args:
       - -c
@@ -343,26 +252,21 @@ steps:
         MCP_URL=$(cat /workspace/mcp_url.txt)
         gcloud run deploy maternasquad-education-agent \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-education-agent:latest \
-          --region=${_REGION} \
-          --platform=managed \
+          --region=${_REGION} --platform=managed \
           --allow-unauthenticated \
-          --min-instances=0 \
-          --max-instances=5 \
-          --memory=512Mi \
-          --cpu=1 \
-          --port=8080 \
-          --timeout=120 \
+          --min-instances=0 --max-instances=5 \
+          --memory=512Mi --cpu=1 --port=8080 --timeout=120 \
           --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest \
           --set-env-vars="MCP_BASE_URL=$$MCP_URL,EDUCATION_AGENT_PORT=8080,CLAUDE_MODEL=claude-sonnet-4-6" \
           --quiet
-        EDUCATION_URL=$(gcloud run services describe maternasquad-education-agent \
+        URL=$(gcloud run services describe maternasquad-education-agent \
           --region=${_REGION} --format='value(status.url)' --quiet)
-        echo "$$EDUCATION_URL" > /workspace/education_url.txt
-        echo "Education agent URL: $$EDUCATION_URL"
+        echo "$$URL" > /workspace/education_url.txt
+        echo "Education: $$URL"
 
   - id: deploy-postpartum-watch
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    waitFor: [push-python-images, deploy-mcp]
+    waitFor: [deploy-mcp]
     entrypoint: bash
     args:
       - -c
@@ -371,31 +275,25 @@ steps:
         MCP_URL=$(cat /workspace/mcp_url.txt)
         gcloud run deploy maternasquad-postpartum-watch \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-postpartum-watch:latest \
-          --region=${_REGION} \
-          --platform=managed \
+          --region=${_REGION} --platform=managed \
           --allow-unauthenticated \
-          --min-instances=0 \
-          --max-instances=5 \
-          --memory=512Mi \
-          --cpu=1 \
-          --port=8080 \
-          --timeout=120 \
+          --min-instances=0 --max-instances=5 \
+          --memory=512Mi --cpu=1 --port=8080 --timeout=120 \
           --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest \
           --set-env-vars="MCP_BASE_URL=$$MCP_URL,POSTPARTUM_WATCH_PORT=8080,CLAUDE_MODEL=claude-sonnet-4-6" \
           --quiet
-        POSTPARTUM_URL=$(gcloud run services describe maternasquad-postpartum-watch \
+        URL=$(gcloud run services describe maternasquad-postpartum-watch \
           --region=${_REGION} --format='value(status.url)' --quiet)
-        echo "$$POSTPARTUM_URL" > /workspace/postpartum_url.txt
-        echo "Postpartum watch URL: $$POSTPARTUM_URL"
+        echo "$$URL" > /workspace/postpartum_url.txt
+        echo "Postpartum: $$URL"
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Phase 7: Deploy orchestrator with all sub-agent URLs wired in
+  # Step 6: Deploy orchestrator with all sub-agent URLs wired in.
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   - id: deploy-orchestrator
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     waitFor:
-      - push-python-images
       - deploy-risk-agent
       - deploy-coverage-agent
       - deploy-education-agent
@@ -413,28 +311,22 @@ steps:
 
         gcloud run deploy maternasquad-orchestrator \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/maternasquad-orchestrator:latest \
-          --region=${_REGION} \
-          --platform=managed \
+          --region=${_REGION} --platform=managed \
           --allow-unauthenticated \
-          --min-instances=0 \
-          --max-instances=5 \
-          --memory=512Mi \
-          --cpu=1 \
-          --port=8080 \
-          --timeout=180 \
+          --min-instances=0 --max-instances=5 \
+          --memory=512Mi --cpu=1 --port=8080 --timeout=180 \
           --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest \
           "--set-env-vars=MCP_BASE_URL=$$MCP_URL,ORCHESTRATOR_PORT=8080,CLAUDE_MODEL=claude-sonnet-4-6,RISK_AGENT_URL=$$RISK_URL/invoke,COVERAGE_AGENT_URL=$$COVERAGE_URL/invoke,EDUCATION_AGENT_URL=$$EDUCATION_URL/invoke,POSTPARTUM_WATCH_URL=$$POSTPARTUM_URL/invoke" \
           --quiet
 
         ORCH_URL=$(gcloud run services describe maternasquad-orchestrator \
           --region=${_REGION} --format='value(status.url)' --quiet)
-
         echo ""
-        echo "All 7 services deployed:"
-        echo "  HAPI:              $(cat /workspace/hapi_url.txt)"
-        echo "  MCP:               $$MCP_URL"
-        echo "  Orchestrator:      $$ORCH_URL"
-        echo "  Risk agent:        $$RISK_URL"
-        echo "  Coverage agent:    $$COVERAGE_URL"
-        echo "  Education agent:   $$EDUCATION_URL"
-        echo "  Postpartum watch:  $$POSTPARTUM_URL"
+        echo "=== All 7 services deployed ==="
+        echo "  HAPI:             $(cat /workspace/hapi_url.txt)"
+        echo "  MCP:              $$MCP_URL"
+        echo "  Orchestrator:     $$ORCH_URL"
+        echo "  Risk agent:       $$RISK_URL"
+        echo "  Coverage agent:   $$COVERAGE_URL"
+        echo "  Education agent:  $$EDUCATION_URL"
+        echo "  Postpartum watch: $$POSTPARTUM_URL"

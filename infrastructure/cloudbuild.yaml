@@ -29,7 +29,7 @@ steps:
       - -c
       - |
         set -e
-        REG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}"
+        REG="europe-west4-docker.pkg.dev/$PROJECT_ID/maternasquad"
 
         echo ">>> Pulling base images..."
         docker pull python:3.11-slim
